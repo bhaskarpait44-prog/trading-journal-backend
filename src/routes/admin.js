@@ -218,4 +218,98 @@ router.get('/payments', guard, async (req, res) => {
   } catch (err) { res.status(500).json({ message: err.message }); }
 });
 
+// ── Platform Settings — stored in DB as a single doc ─────────────────────────
+const SettingsSchema = new mongoose.Schema({ key: { type: String, unique: true }, value: mongoose.Schema.Types.Mixed });
+const Settings = mongoose.models.Settings || mongoose.model('Settings', SettingsSchema);
+
+const DEFAULT_SETTINGS = {
+  platformName:     'TradeLog',
+  supportEmail:     'support@tradelog.in',
+  starterPrice:     199,
+  proPrice:         699,
+  trialDays:        14,
+  maintenanceMode:  false,
+  allowSignups:     true,
+  maxTradesPerUser: 10000,
+  announcement:     '',
+};
+
+// ── GET /api/admin/settings ───────────────────────────────────────────────────
+router.get('/settings', guard, async (req, res) => {
+  try {
+    const doc = await Settings.findOne({ key: 'platform' });
+    res.json({ settings: doc?.value || DEFAULT_SETTINGS });
+  } catch (err) { res.status(500).json({ message: err.message }); }
+});
+
+// ── PUT /api/admin/settings ───────────────────────────────────────────────────
+router.put('/settings', guard, async (req, res) => {
+  try {
+    const allowed = ['platformName','supportEmail','starterPrice','proPrice','trialDays',
+                     'maintenanceMode','allowSignups','maxTradesPerUser','announcement'];
+    const update  = {};
+    allowed.forEach(k => { if (req.body[k] !== undefined) update[k] = req.body[k]; });
+
+    const doc = await Settings.findOneAndUpdate(
+      { key: 'platform' },
+      { $set: { value: { ...DEFAULT_SETTINGS, ...update } } },
+      { upsert: true, new: true }
+    );
+    res.json({ success: true, settings: doc.value });
+  } catch (err) { res.status(500).json({ message: err.message }); }
+});
+
+// ── POST /api/admin/users/:id/make-admin ──────────────────────────────────────
+router.post('/users/:id/make-admin', guard, async (req, res) => {
+  try {
+    const user = await User.findByIdAndUpdate(req.params.id, { $set: { role: 'admin' } }, { new: true }).select('-password');
+    if (!user) return res.status(404).json({ message: 'User not found' });
+    res.json({ success: true, message: `${user.email} is now an admin`, user });
+  } catch (err) { res.status(500).json({ message: err.message }); }
+});
+
+// ── POST /api/admin/users/:id/revoke-admin ────────────────────────────────────
+router.post('/users/:id/revoke-admin', guard, async (req, res) => {
+  try {
+    const user = await User.findByIdAndUpdate(req.params.id, { $set: { role: 'user' } }, { new: true }).select('-password');
+    if (!user) return res.status(404).json({ message: 'User not found' });
+    res.json({ success: true, message: `Admin access revoked for ${user.email}`, user });
+  } catch (err) { res.status(500).json({ message: err.message }); }
+});
+
+// ── POST /api/admin/users/:id/extend-subscription ────────────────────────────
+router.post('/users/:id/extend-subscription', guard, async (req, res) => {
+  try {
+    const { days = 30, plan } = req.body;
+    const user = await User.findById(req.params.id);
+    if (!user) return res.status(404).json({ message: 'User not found' });
+
+    const currentExpiry = user.subscription?.expiry && new Date(user.subscription.expiry) > new Date()
+      ? new Date(user.subscription.expiry)
+      : new Date();
+    const newExpiry = new Date(currentExpiry.getTime() + days * 24 * 60 * 60 * 1000);
+
+    const update = { 'subscription.expiry': newExpiry, 'subscription.status': 'active' };
+    if (plan) update['subscription.plan'] = plan;
+
+    await User.findByIdAndUpdate(req.params.id, { $set: update });
+    res.json({ success: true, message: `Subscription extended by ${days} days`, newExpiry });
+  } catch (err) { res.status(500).json({ message: err.message }); }
+});
+
+// ── POST /api/admin/broadcast ─────────────────────────────────────────────────
+router.post('/broadcast', guard, async (req, res) => {
+  try {
+    const { message } = req.body;
+    if (!message) return res.status(400).json({ message: 'Message required' });
+    // Store announcement in settings
+    await Settings.findOneAndUpdate(
+      { key: 'platform' },
+      { $set: { 'value.announcement': message } },
+      { upsert: true }
+    );
+    res.json({ success: true, message: 'Announcement updated for all users' });
+  } catch (err) { res.status(500).json({ message: err.message }); }
+});
+
 export default router;
