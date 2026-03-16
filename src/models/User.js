@@ -44,6 +44,10 @@ const userSchema = new mongoose.Schema({
   // ── Active sessions ───────────────────────────────────────────────────────
   sessions: [sessionSchema],
 
+  // ── Password reset ────────────────────────────────────────────────────────
+  passwordResetToken:  { type: String },
+  passwordResetExpiry: { type: Date },
+
   preferences: {
     defaultCapital: { type: Number, default: 100000 },
     currency:       { type: String, default: 'INR' },
