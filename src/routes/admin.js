@@ -223,6 +223,7 @@ const SettingsSchema = new mongoose.Schema({ key: { type: String, unique: true }
 const Settings = mongoose.models.Settings || mongoose.model('Settings', SettingsSchema);
 
 const DEFAULT_SETTINGS = {
+  // ── Platform ──────────────────────────────────────────────────────────────
   platformName:     'TradeLog',
   supportEmail:     'support@tradelog.in',
   starterPrice:     199,
@@ -232,6 +233,66 @@ const DEFAULT_SETTINGS = {
   allowSignups:     true,
   maxTradesPerUser: 10000,
   announcement:     '',
+
+  // ── Landing — Hero ────────────────────────────────────────────────────────
+  heroTagline:      'Built for NIFTY, BANKNIFTY & F&O Traders',
+  heroTitle:        'Become a Consistently Profitable Options Trader',
+  heroSubtext:      'Track trades, analyse strategies, control risk, and master your trading psychology — all in one powerful journal built for Indian options markets.',
+  heroCtaPrimary:   'Get Started',
+  heroCtaSecondary: 'View Pricing',
+  heroStat1Value:   '10,000+',  heroStat1Label: 'Active traders',
+  heroStat2Value:   '₹50Cr+',   heroStat2Label: 'P&L tracked',
+  heroStat3Value:   '4.9★',     heroStat3Label: 'User rating',
+
+  // ── Landing — Features ────────────────────────────────────────────────────
+  featuresTitle:    'Everything you need to trade like a professional',
+  featuresSub:      'Designed specifically for Indian options traders — not generic tools repurposed for F&O.',
+  features: [
+    { icon:'📒', title:'Trade Book',          desc:'Log every NIFTY, BANKNIFTY & F&O trade. Auto-calculate P&L, charges, and net returns per trade.' },
+    { icon:'📊', title:'Strategy Analytics',  desc:'See which strategies — Iron Condor, Straddle, Scalp — actually make you money and which drain your capital.' },
+    { icon:'🧠', title:'Psychology Tracking', desc:'Track emotions before and after each trade. Detect revenge trading, FOMO entries, and overtrading patterns.' },
+    { icon:'🛡️', title:'Risk Management',     desc:'Set capital limits, daily loss caps, and position sizing rules. Get alerted before you break your own rules.' },
+    { icon:'🔍', title:'Mistake Detection',   desc:'Auto-tag common mistakes: no stop loss, late entry, oversized position. Learn from patterns across hundreds of trades.' },
+    { icon:'🔗', title:'Broker Sync',         desc:'Sync trades directly from Dhan API. No manual entry for broker trades — just connect and analyse.' },
+    { icon:'📈', title:'Performance Dashboard',desc:'Daily P&L, equity curve, win rate, streak tracking, and drawdown analysis — your entire trading career in one view.' },
+    { icon:'🎯', title:'Option Strategy Tracker',desc:'Track strategies like Straddle, Strangle, Iron Condor, Bull Call Spread — with legs, Greeks, and P&L attribution.' },
+  ],
+
+  // ── Landing — Pricing ─────────────────────────────────────────────────────
+  pricingTitle:     'Simple, transparent pricing',
+  pricingSub:       'Start free, upgrade when you\'re ready. Cancel anytime.',
+  starterPlanName:  'Starter',
+  starterPlanPer:   'Billed monthly · No setup fee',
+  starterFeatures:  ['Trade journal (unlimited)','Basic analytics dashboard','Psychology tracking','Risk management tools','CSV import (all brokers)','Email support'],
+  proPlanName:      'Pro Trader',
+  proPlanPer:       'Billed monthly · 14-day free trial',
+  proFeatures:      ['Everything in Starter','Advanced strategy analytics','Strategy performance tracking','Dhan broker auto sync','AI trade insights & patterns','Priority support + Discord'],
+  proPlanBadge:     'MOST POPULAR',
+
+  // ── Landing — Testimonials ────────────────────────────────────────────────
+  testimonialsTitle: 'Trusted by Indian options traders',
+  testimonials: [
+    { name:'Arjun M.',  role:'Options Scalper, Mumbai',      initials:'AM', gradient:'linear-gradient(135deg,#3b82f6,#1d4ed8)', quote:'I was profitable some days and losing on others with no idea why. TradeLog showed me I had a 74% win rate on ORB trades but was destroying profits with FOMO entries after 2PM. Game changer.' },
+    { name:'Priya S.',  role:'Swing Trader, Bangalore',      initials:'PS', gradient:'linear-gradient(135deg,#a855f7,#7c3aed)', quote:'The psychology tracking is unreal. I discovered I trade completely differently when I\'m overconfident — win rate drops from 65% to 31%. Now I size down automatically on those days.' },
+    { name:'Rahul K.',  role:'BankNifty Trader, Hyderabad',  initials:'RK', gradient:'linear-gradient(135deg,#22c55e,#16a34a)', quote:'Dhan broker sync means my trades just appear. No manual entry. The strategy analytics showed Iron Condor is my best setup — I had no idea. Up ₹3.2L since switching focus.' },
+  ],
+
+  // ── Landing — FAQ ─────────────────────────────────────────────────────────
+  faqTitle: 'Questions answered',
+  faq: [
+    { q:'Is TradeLog connected to brokers directly?',       a:'Yes — the Pro plan includes Dhan API sync that automatically imports your F&O trades. We only read trade data; we cannot place orders or access your funds.' },
+    { q:'Can beginners use this?',                          a:'Absolutely. The Starter plan is perfect for new traders who want to understand their patterns. Just log trades manually or upload your broker CSV — no API setup needed.' },
+    { q:'Is my trade data secure?',                        a:'Your data is encrypted in transit and at rest. We never share your data with third parties. You can export or delete all your data at any time from the profile page.' },
+    { q:'Which brokers are supported for CSV import?',     a:'Zerodha, Dhan, Upstox, Angel One, Fyers, Groww, 5Paisa, ICICI Direct, HDFC Securities, Kotak, AliceBlue, Sharekhan, and more. Most CSVs are auto-detected.' },
+    { q:'What is the 14-day free trial?',                  a:'The Pro plan comes with a full 14-day free trial. No credit card required to start. You\'ll only be charged after the trial ends if you choose to continue.' },
+    { q:'Can I cancel anytime?',                           a:'Yes. No lock-in. Cancel from your profile page and you\'ll keep access until the end of your billing period. No questions asked.' },
+  ],
+
+  // ── Landing — Final CTA ───────────────────────────────────────────────────
+  finalCtaTitle:  'Stop Guessing. Start Trading with Data.',
+  finalCtaSub:    'Join 10,000+ Indian options traders who journal with TradeLog.',
+  finalCtaBtn:    'Get Started →',
+  finalCtaNote:   'No credit card required · Cancel anytime',
 };
 
 // ── GET /api/admin/settings ───────────────────────────────────────────────────
@@ -245,17 +306,42 @@ router.get('/settings', guard, async (req, res) => {
 // ── PUT /api/admin/settings ───────────────────────────────────────────────────
 router.put('/settings', guard, async (req, res) => {
   try {
-    const allowed = ['platformName','supportEmail','starterPrice','proPrice','trialDays',
-                     'maintenanceMode','allowSignups','maxTradesPerUser','announcement'];
-    const update  = {};
+    const allowed = [
+      'platformName','supportEmail','starterPrice','proPrice','trialDays',
+      'maintenanceMode','allowSignups','maxTradesPerUser','announcement',
+      // landing
+      'heroTagline','heroTitle','heroSubtext','heroCtaPrimary','heroCtaSecondary',
+      'heroStat1Value','heroStat1Label','heroStat2Value','heroStat2Label','heroStat3Value','heroStat3Label',
+      'featuresTitle','featuresSub','features',
+      'pricingTitle','pricingSub','starterPlanName','starterPlanPer','starterFeatures',
+      'proPlanName','proPlanPer','proFeatures','proPlanBadge',
+      'testimonialsTitle','testimonials',
+      'faqTitle','faq',
+      'finalCtaTitle','finalCtaSub','finalCtaBtn','finalCtaNote',
+    ];
+    const update = {};
     allowed.forEach(k => { if (req.body[k] !== undefined) update[k] = req.body[k]; });
+
+    const current = await Settings.findOne({ key: 'platform' });
+    const merged  = { ...DEFAULT_SETTINGS, ...(current?.value || {}), ...update };
 
     const doc = await Settings.findOneAndUpdate(
       { key: 'platform' },
-      { $set: { value: { ...DEFAULT_SETTINGS, ...update } } },
+      { $set: { value: merged } },
       { upsert: true, new: true }
     );
     res.json({ success: true, settings: doc.value });
+  } catch (err) { res.status(500).json({ message: err.message }); }
+});
+
+// ── GET /api/admin/public-settings  (no auth — used by landing page) ─────────
+router.get('/public-settings', async (req, res) => {
+  try {
+    const doc = await Settings.findOne({ key: 'platform' });
+    const s   = { ...DEFAULT_SETTINGS, ...(doc?.value || {}) };
+    // strip sensitive / server-only fields
+    const { maintenanceMode, allowSignups, maxTradesPerUser, announcement, supportEmail, ...pub } = s;
+    res.json({ settings: pub });
   } catch (err) { res.status(500).json({ message: err.message }); }
 });
 
