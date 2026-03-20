@@ -32,9 +32,12 @@ router.get('/summary', async (req, res) => {
 // ── GET /api/analytics/pnl-chart ─────────────────────────────────────────────
 router.get('/pnl-chart', async (req, res) => {
   try {
-    const { days = 30 } = req.query;
-    const from = new Date(); from.setDate(from.getDate() - Number(days));
-    const trades = await Trade.find({ userId: req.user._id, status: 'CLOSED', exitDate: { $gte: from } }).sort({ exitDate: 1 });
+    const { days = 30, from: fromQ, to: toQ } = req.query;
+    // Accept explicit from/to OR fall back to days-ago
+    const fromDate = fromQ ? new Date(fromQ) : (() => { const d = new Date(); d.setDate(d.getDate() - Number(days)); return d; })();
+    const toDate   = toQ   ? new Date(toQ)   : new Date();
+    toDate.setHours(23, 59, 59, 999); // include full last day
+    const trades = await Trade.find({ userId: req.user._id, status: 'CLOSED', exitDate: { $gte: fromDate, $lte: toDate } }).sort({ exitDate: 1 });
     const dailyMap = {};
     trades.forEach(t => {
       const date = t.exitDate.toISOString().split('T')[0];
