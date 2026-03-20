@@ -121,3 +121,166 @@ router.get('/psychology', async (req, res) => {
 });
 
 export default router;
+
+// ── GET /api/analytics/deep ───────────────────────────────────────────────────
+// Returns: holding time, time-of-day, day-of-week, charges impact, streaks
+router.get('/deep', async (req, res) => {
+  try {
+    const { from, to } = req.query;
+    const filter = { userId: req.user._id, status: 'CLOSED' };
+    if (from || to) {
+      filter.exitDate = {};
+      if (from) filter.exitDate.$gte = new Date(from);
+      if (to)   { const t = new Date(to); t.setHours(23,59,59,999); filter.exitDate.$lte = t; }
+    }
+    const trades = await Trade.find(filter).sort({ exitDate: 1 });
+    if (!trades.length) return res.json({ empty: true });
+
+    // ── Holding time ─────────────────────────────────────────────────────────
+    const withHold = trades.filter(t => t.entryDate && t.exitDate);
+    const holdMins = withHold.map(t => (new Date(t.exitDate) - new Date(t.entryDate)) / 60000);
+    const avgHoldMins  = holdMins.length ? holdMins.reduce((a,b)=>a+b,0) / holdMins.length : 0;
+    const minHoldMins  = holdMins.length ? Math.min(...holdMins) : 0;
+    const maxHoldMins  = holdMins.length ? Math.max(...holdMins) : 0;
+
+    function fmtMins(m) {
+      if (m < 60)   return `${Math.round(m)}m`;
+      if (m < 1440) return `${Math.floor(m/60)}h ${Math.round(m%60)}m`;
+      return `${Math.floor(m/1440)}d ${Math.floor((m%1440)/60)}h`;
+    }
+
+    // Holding time distribution buckets
+    const holdBuckets = { '<15m':0, '15–60m':0, '1–4h':0, '4–24h':0, '>1d':0 };
+    const holdPnl     = { '<15m':0, '15–60m':0, '1–4h':0, '4–24h':0, '>1d':0 };
+    const holdCount   = { '<15m':0, '15–60m':0, '1–4h':0, '4–24h':0, '>1d':0 };
+    withHold.forEach((t, i) => {
+      const m   = holdMins[i];
+      const pnl = t.netPnl || 0;
+      let bucket;
+      if      (m < 15)   bucket = '<15m';
+      else if (m < 60)   bucket = '15–60m';
+      else if (m < 240)  bucket = '1–4h';
+      else if (m < 1440) bucket = '4–24h';
+      else               bucket = '>1d';
+      holdBuckets[bucket]++;
+      holdPnl[bucket]    += pnl;
+      holdCount[bucket]  += 1;
+    });
+    const holdingTime = Object.keys(holdBuckets).map(k => ({
+      label:    k,
+      trades:   holdBuckets[k],
+      totalPnl: parseFloat((holdPnl[k]||0).toFixed(2)),
+      avgPnl:   holdCount[k] ? parseFloat((holdPnl[k]/holdCount[k]).toFixed(2)) : 0,
+      wins:     withHold.filter((t,i) => {
+        const m = holdMins[i]; const pnl = t.netPnl||0;
+        if (k==='<15m')   return m<15   && pnl>0;
+        if (k==='15–60m') return m>=15  && m<60  && pnl>0;
+        if (k==='1–4h')   return m>=60  && m<240 && pnl>0;
+        if (k==='4–24h')  return m>=240 && m<1440&& pnl>0;
+        return m>=1440 && pnl>0;
+      }).length,
+    })).filter(b => b.trades > 0);
+
+    // ── Time of day (IST = UTC+5:30) ──────────────────────────────────────────
+    const hourSlots = {};
+    trades.forEach(t => {
+      if (!t.entryDate) return;
+      const utcH = new Date(t.entryDate).getUTCHours();
+      const utcM = new Date(t.entryDate).getUTCMinutes();
+      const istMins = utcH * 60 + utcM + 330; // +5:30
+      const istH    = Math.floor((istMins % 1440) / 60);
+      // Group into 1-hour slots, IST 9–16 covers market hours
+      const label = `${istH}:00`;
+      if (!hourSlots[label]) hourSlots[label] = { label, trades:0, totalPnl:0, wins:0 };
+      hourSlots[label].trades++;
+      hourSlots[label].totalPnl += t.netPnl || 0;
+      if ((t.netPnl||0) > 0) hourSlots[label].wins++;
+    });
+    const timeOfDay = Object.values(hourSlots)
+      .map(s => ({ ...s, totalPnl: parseFloat(s.totalPnl.toFixed(2)), avgPnl: parseFloat((s.totalPnl/s.trades).toFixed(2)), winRate: parseFloat(((s.wins/s.trades)*100).toFixed(1)) }))
+      .sort((a,b) => parseInt(a.label) - parseInt(b.label));
+
+    // ── Day of week ───────────────────────────────────────────────────────────
+    const DAYS = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+    const daySlots = {};
+    trades.forEach(t => {
+      if (!t.entryDate) return;
+      // Convert to IST day
+      const istMs  = new Date(t.entryDate).getTime() + 330 * 60000;
+      const day    = DAYS[new Date(istMs).getUTCDay()];
+      if (!daySlots[day]) daySlots[day] = { label:day, trades:0, totalPnl:0, wins:0 };
+      daySlots[day].trades++;
+      daySlots[day].totalPnl += t.netPnl || 0;
+      if ((t.netPnl||0) > 0) daySlots[day].wins++;
+    });
+    const dayOfWeek = ['Mon','Tue','Wed','Thu','Fri']
+      .filter(d => daySlots[d])
+      .map(d => ({
+        ...daySlots[d],
+        totalPnl: parseFloat(daySlots[d].totalPnl.toFixed(2)),
+        avgPnl:   parseFloat((daySlots[d].totalPnl / daySlots[d].trades).toFixed(2)),
+        winRate:  parseFloat(((daySlots[d].wins / daySlots[d].trades) * 100).toFixed(1)),
+      }));
+
+    // ── Charges impact ────────────────────────────────────────────────────────
+    const grossPnl      = trades.reduce((s,t) => s + (t.pnl     || 0), 0);
+    const totalCharges  = trades.reduce((s,t) => s + (t.charges || 0), 0);
+    const netPnl        = trades.reduce((s,t) => s + (t.netPnl  || 0), 0);
+    const chargesPct    = Math.abs(grossPnl) > 0 ? Math.abs(totalCharges / grossPnl) * 100 : 0;
+    const avgCharges    = trades.length ? totalCharges / trades.length : 0;
+    // Trades where charges > |pnl| (charges ate the profit)
+    const chargesAteIt  = trades.filter(t => Math.abs(t.charges||0) > Math.abs(t.pnl||0) && Math.abs(t.charges||0) > 0).length;
+
+    const chargesImpact = {
+      grossPnl:    parseFloat(grossPnl.toFixed(2)),
+      totalCharges:parseFloat(totalCharges.toFixed(2)),
+      netPnl:      parseFloat(netPnl.toFixed(2)),
+      chargesPct:  parseFloat(chargesPct.toFixed(1)),
+      avgCharges:  parseFloat(avgCharges.toFixed(2)),
+      chargesAteIt,
+    };
+
+    // ── Streaks ───────────────────────────────────────────────────────────────
+    let curWin = 0, curLoss = 0;
+    let maxWinStreak = 0, maxLossStreak = 0;
+    let curWinPnl = 0, bestStreakPnl = 0;
+    let curLossPnl = 0, worstStreakPnl = 0;
+
+    trades.forEach(t => {
+      const pnl = t.netPnl || 0;
+      if (pnl > 0) {
+        curWin++; curLoss = 0; curLossPnl = 0;
+        curWinPnl += pnl;
+        if (curWin > maxWinStreak) { maxWinStreak = curWin; bestStreakPnl = curWinPnl; }
+      } else {
+        curLoss++; curWin = 0; curWinPnl = 0;
+        curLossPnl += pnl;
+        if (curLoss > maxLossStreak) { maxLossStreak = curLoss; worstStreakPnl = curLossPnl; }
+      }
+    });
+
+    // Current streak (from end)
+    let currentStreak = 0, currentStreakType = 'none';
+    for (let i = trades.length - 1; i >= 0; i--) {
+      const pnl = trades[i].netPnl || 0;
+      const type = pnl > 0 ? 'win' : 'loss';
+      if (currentStreak === 0) { currentStreakType = type; currentStreak = 1; }
+      else if (type === currentStreakType) currentStreak++;
+      else break;
+    }
+
+    const streaks = {
+      maxWinStreak, bestStreakPnl:  parseFloat(bestStreakPnl.toFixed(2)),
+      maxLossStreak, worstStreakPnl: parseFloat(worstStreakPnl.toFixed(2)),
+      currentStreak, currentStreakType,
+    };
+
+    res.json({
+      empty: false,
+      avgHold: fmtMins(avgHoldMins),
+      minHold: fmtMins(minHoldMins),
+      maxHold: fmtMins(maxHoldMins),
+      holdingTime, timeOfDay, dayOfWeek, chargesImpact, streaks,
+    });
+  } catch (err) { res.status(500).json({ message: err.message }); }
+});
