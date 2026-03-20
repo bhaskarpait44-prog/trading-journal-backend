@@ -10,7 +10,7 @@ const FAIL_COOLDOWN = 30 * 60 * 1000; // only warn once per 30 min
 
 // ── Static fallback (Jan 2025 NSE F&O lot sizes) ──────────────────────────
 const STATIC_SYMBOLS = [
-  { symbol: 'NIFTY',          lotSize: 75   },
+  { symbol: 'NIFTY',          lotSize: 65   },
   { symbol: 'BANKNIFTY',      lotSize: 30   },
   { symbol: 'FINNIFTY',       lotSize: 65   },
   { symbol: 'MIDCPNIFTY',     lotSize: 120  },
