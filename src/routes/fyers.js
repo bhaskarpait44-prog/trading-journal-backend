@@ -89,7 +89,7 @@ router.get('/callback', async (req, res) => {
     console.log('[Fyers] hashInput:', hashInput);
     console.log('[Fyers] appIdHash:', appIdHash);
 
-    const r = await axios.post('https://api-t1.fyers.in/api/v3/validate-authcode', {
+    const r = await axios.post('https://api-t1.fyers.in/api/v3/token', {
       grant_type: 'authorization_code',
       appIdHash,
       code: authCode,
