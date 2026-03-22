@@ -11,7 +11,7 @@ router.get('/summary', async (req, res) => {
     const { from, to } = req.query;
     const filter = { userId: req.user._id, status: 'CLOSED' };
     if (from || to) { filter.exitDate = {}; if (from) filter.exitDate.$gte = new Date(from); if (to) filter.exitDate.$lte = new Date(to); }
-    const trades     = await Trade.find(filter);
+    const trades     = await Trade.find(filter).sort({ exitDate: 1, entryDate: 1 });
     const openTrades = await Trade.countDocuments({ userId: req.user._id, status: 'OPEN' });
     const winners    = trades.filter(t => t.netPnl > 0);
     const losers     = trades.filter(t => t.netPnl <= 0);
@@ -23,6 +23,30 @@ router.get('/summary', async (req, res) => {
     const bseCharges   = trades.filter(t => t.exchange === 'BSE').reduce((s,t) => s + (t.charges||0), 0);
     const nseTrades    = trades.filter(t => (t.exchange||'NSE') === 'NSE').length;
     const bseTrades    = trades.filter(t => t.exchange === 'BSE').length;
+
+    // ── Streaks ───────────────────────────────────────────────────────────────
+    let curWin = 0, curLoss = 0, maxWinStreak = 0, maxLossStreak = 0;
+    let curWinPnl = 0, bestStreakPnl = 0, curLossPnl = 0, worstStreakPnl = 0;
+    trades.forEach(t => {
+      const pnl = t.netPnl || 0;
+      if (pnl > 0) {
+        curWin++; curLoss = 0; curLossPnl = 0; curWinPnl += pnl;
+        if (curWin > maxWinStreak) { maxWinStreak = curWin; bestStreakPnl = curWinPnl; }
+      } else {
+        curLoss++; curWin = 0; curWinPnl = 0; curLossPnl += pnl;
+        if (curLoss > maxLossStreak) { maxLossStreak = curLoss; worstStreakPnl = curLossPnl; }
+      }
+    });
+    // Current streak — walk backwards from most recent trade
+    let currentStreak = 0, currentStreakType = 'none', currentStreakPnl = 0;
+    for (let i = trades.length - 1; i >= 0; i--) {
+      const pnl  = trades[i].netPnl || 0;
+      const type = pnl > 0 ? 'win' : 'loss';
+      if (currentStreak === 0) { currentStreakType = type; currentStreak = 1; currentStreakPnl = pnl; }
+      else if (type === currentStreakType) { currentStreak++; currentStreakPnl += pnl; }
+      else break;
+    }
+
     res.json({
       totalTrades: trades.length, openTrades, winners: winners.length, losers: losers.length,
       totalPnl, totalCharges, nseCharges, bseCharges, nseTrades, bseTrades,
@@ -31,6 +55,12 @@ router.get('/summary', async (req, res) => {
       profitFactor: Math.abs(avgLoss) > 0 ? Math.abs(avgWin / avgLoss) : 0,
       maxWin:  winners.length ? Math.max(...winners.map(t => t.netPnl)) : 0,
       maxLoss: losers.length  ? Math.min(...losers.map(t  => t.netPnl)) : 0,
+      streaks: {
+        currentStreak, currentStreakType,
+        currentStreakPnl: parseFloat(currentStreakPnl.toFixed(2)),
+        maxWinStreak,  bestStreakPnl:  parseFloat(bestStreakPnl.toFixed(2)),
+        maxLossStreak, worstStreakPnl: parseFloat(worstStreakPnl.toFixed(2)),
+      },
     });
   } catch (err) { res.status(500).json({ message: err.message }); }
 });
