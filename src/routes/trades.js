@@ -102,7 +102,6 @@ router.put('/:id', async (req, res) => {
       { new: true, runValidators: true }
     );
     res.json({ trade });
-    res.json({trade});
   } catch(err){res.status(400).json({message:err.message});}
 });
 

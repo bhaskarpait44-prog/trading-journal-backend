@@ -126,6 +126,81 @@ router.get('/psychology', async (req, res) => {
   } catch (err) { res.status(500).json({ message: err.message }); }
 });
 
+// ── GET /api/analytics/psychology-trends ─────────────────────────────────────
+// Returns weekly/monthly time-series for: discipline score, emotion distribution, mistake trends
+router.get('/psychology-trends', async (req, res) => {
+  try {
+    const { period = 'week' } = req.query; // 'week' | 'month'
+    const trades = await Trade.find({
+      userId: req.user._id,
+      'psychology.emotionBefore': { $exists: true, $ne: '' },
+    }).sort({ entryDate: 1 });
+
+    if (!trades.length) return res.json({ periods: [], discipline: [], emotions: [], mistakes: [] });
+
+    // Group trades into weekly or monthly buckets
+    const buckets = {};
+    const MISTAKES = ['fomo_entry', 'revenge_trade', 'overtrading', 'no_stoploss', 'oversized_position', 'early_exit', 'late_entry'];
+    const EMOTIONS  = ['calm', 'confident', 'fearful', 'frustrated', 'overconfident', 'revenge'];
+
+    trades.forEach(t => {
+      const d    = new Date(t.entryDate);
+      let key;
+      if (period === 'month') {
+        key = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`;
+      } else {
+        // ISO week: Monday-based
+        const day  = d.getDay() || 7; // make Sunday = 7
+        const mon  = new Date(d); mon.setDate(d.getDate() - day + 1);
+        key = `${mon.getFullYear()}-W${String(Math.ceil((((mon - new Date(mon.getFullYear(),0,1))/86400000)+1)/7)).padStart(2,'0')}`;
+      }
+      if (!buckets[key]) {
+        buckets[key] = { key, disciplineSum: 0, disciplineCount: 0, emotions: {}, mistakes: {}, trades: 0, wins: 0, pnl: 0 };
+        EMOTIONS.forEach(e  => buckets[key].emotions[e]  = 0);
+        MISTAKES.forEach(m  => buckets[key].mistakes[m]  = 0);
+      }
+      const b = buckets[key];
+      b.trades++;
+      b.pnl += t.netPnl || 0;
+      if ((t.netPnl||0) > 0) b.wins++;
+      const disc = t.psychology?.disciplineRating;
+      if (disc != null) { b.disciplineSum += disc; b.disciplineCount++; }
+      const em = t.psychology?.emotionBefore;
+      if (em && b.emotions[em] !== undefined) b.emotions[em]++;
+      (t.psychology?.mistakeTags || []).forEach(tag => { if (b.mistakes[tag] !== undefined) b.mistakes[tag]++; });
+    });
+
+    const sorted = Object.values(buckets).sort((a,b) => a.key.localeCompare(b.key));
+
+    // Format label for display
+    const fmtLabel = key => {
+      if (key.includes('W')) {
+        // Week label: show "Dec W3" style
+        const [yr, wk] = key.split('-W');
+        return `W${wk} '${yr.slice(2)}`;
+      }
+      const [yr, mo] = key.split('-');
+      return new Date(+yr, +mo-1, 1).toLocaleString('en', { month:'short', year:'2-digit' });
+    };
+
+    res.json({
+      periods: sorted.map(b => fmtLabel(b.key)),
+      // Discipline: avg score per period, null if no data
+      discipline: sorted.map(b => b.disciplineCount > 0 ? parseFloat((b.disciplineSum / b.disciplineCount).toFixed(2)) : null),
+      // Win rate per period
+      winRate: sorted.map(b => b.trades > 0 ? parseFloat(((b.wins / b.trades) * 100).toFixed(1)) : null),
+      // Trades count per period
+      tradeCount: sorted.map(b => b.trades),
+      // PnL per period
+      pnl: sorted.map(b => parseFloat(b.pnl.toFixed(2))),
+      // Emotion distribution per period: { calm: [...], confident: [...], ... }
+      emotions: Object.fromEntries(EMOTIONS.map(e => [e, sorted.map(b => b.emotions[e])])),
+      // Mistake trend per period: { fomo_entry: [...], revenge_trade: [...], ... }
+      mistakes: Object.fromEntries(MISTAKES.map(m => [m, sorted.map(b => b.mistakes[m])])),
+    });
+  } catch (err) { res.status(500).json({ message: err.message }); }
+});
+
 export default router;
 
 // ── GET /api/analytics/deep ───────────────────────────────────────────────────
