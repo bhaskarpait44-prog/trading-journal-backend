@@ -63,12 +63,14 @@ router.get('/callback', async (req, res) => {
   if (error) {
     session.status = 'error';
     session.error  = `Fyers returned error: ${error}`;
+    res.setHeader('Cross-Origin-Opener-Policy', 'unsafe-none');
     return res.send(closePopupHTML(session.error, null));
   }
 
   if (!authCode) {
     session.status = 'error';
     session.error  = 'No auth code received from Fyers';
+    res.setHeader('Cross-Origin-Opener-Policy', 'unsafe-none');
     return res.send(closePopupHTML(session.error, null));
   }
 
@@ -111,6 +113,7 @@ router.get('/callback', async (req, res) => {
     session.status      = 'success';
     session.accessToken = accessToken;
 
+    res.setHeader('Cross-Origin-Opener-Policy', 'unsafe-none');
     return res.send(closePopupHTML(null, accessToken, session.appId, sessionId));
 
   } catch (err) {
@@ -155,10 +158,7 @@ function closePopupHTML(error, accessToken, appId, sessionId) {
       <div style="font-size:0.8rem;color:#7a90b0;margin-bottom:1.5rem">${error}</div>
       <div style="font-size:0.75rem;color:#3a4f6a">This window will close in 3 seconds…</div>
     </div>
-    <script>
-      if (window.opener) window.opener.postMessage({ type:'FYERS_AUTH_ERROR', error: ${JSON.stringify(error)} }, '*');
-      setTimeout(() => window.close(), 3000);
-    </script>
+    <script>setTimeout(() => window.close(), 3000);</script>
     </body></html>`;
   }
 
@@ -168,19 +168,9 @@ function closePopupHTML(error, accessToken, appId, sessionId) {
   <div>
     <div style="font-size:2rem;margin-bottom:1rem">✅</div>
     <div style="font-size:1rem;font-weight:600;color:#e8eeff;margin-bottom:0.5rem">Connected to Fyers!</div>
-    <div style="font-size:0.75rem;color:#3a4f6a">This window will close automatically…</div>
+    <div style="font-size:0.75rem;color:#3a4f6a">Closing window…</div>
   </div>
-  <script>
-    if (window.opener) {
-      window.opener.postMessage({
-        type: 'FYERS_AUTH_SUCCESS',
-        accessToken: ${JSON.stringify(accessToken)},
-        appId: ${JSON.stringify(appId)},
-        sessionId: ${JSON.stringify(sessionId)},
-      }, '*');
-    }
-    setTimeout(() => window.close(), 1500);
-  </script>
+  <script>setTimeout(() => window.close(), 1000);</script>
   </body></html>`;
 }
 
