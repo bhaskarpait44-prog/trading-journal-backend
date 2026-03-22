@@ -232,4 +232,116 @@ router.get('/fno-symbols', async (req, res) => {
   res.json({ symbols: STATIC_SYMBOLS, source: 'static_fallback', count: STATIC_SYMBOLS.length });
 });
 
+// ── GET /api/nse/market-snapshot ──────────────────────────────────────────────
+// Returns current NIFTY 50 level and India VIX
+const snapCache = { data: null, ts: 0 };
+const SNAP_TTL  = 3 * 60 * 1000; // 3-minute cache (live during market hours)
+
+router.get('/market-snapshot', async (req, res) => {
+  // Serve from cache if fresh
+  if (snapCache.data && Date.now() - snapCache.ts < SNAP_TTL) {
+    return res.json({ ...snapCache.data, source: 'cache' });
+  }
+
+  try {
+    const { default: axios } = await import('axios');
+
+    // Establish NSE session cookie first
+    const homeRes = await axios.get('https://www.nseindia.com', {
+      timeout: 8000,
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+        'Accept': 'text/html,application/xhtml+xml',
+        'Accept-Language': 'en-US,en;q=0.9',
+      },
+    });
+    const cookies = homeRes.headers['set-cookie']?.map(c => c.split(';')[0]).join('; ') || '';
+
+    const NSE_HEADERS = {
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+      'Accept': 'application/json',
+      'Referer': 'https://www.nseindia.com',
+      'Cookie': cookies,
+    };
+
+    // Fetch NIFTY 50 and India VIX in parallel
+    const [niftyRes, vixRes] = await Promise.all([
+      axios.get('https://www.nseindia.com/api/quote-equity?symbol=NIFTY%2050&series=["EQ"]', {
+        timeout: 6000, headers: NSE_HEADERS,
+      }).catch(() => null),
+      axios.get('https://www.nseindia.com/api/quote-equity?symbol=INDIA%20VIX&series=["EQ"]', {
+        timeout: 6000, headers: NSE_HEADERS,
+      }).catch(() => null),
+    ]);
+
+    // Parse NIFTY — try multiple response shapes NSE uses
+    let nifty = null;
+    if (niftyRes?.data) {
+      const d = niftyRes.data;
+      nifty = d.priceInfo?.lastPrice
+           || d.data?.[0]?.lastPrice
+           || d.lastPrice
+           || null;
+    }
+
+    // Parse VIX
+    let vix = null;
+    if (vixRes?.data) {
+      const d = vixRes.data;
+      vix = d.priceInfo?.lastPrice
+         || d.data?.[0]?.lastPrice
+         || d.lastPrice
+         || null;
+    }
+
+    // Fallback: try indices API if quote API didn't work
+    if (!nifty || !vix) {
+      const idxRes = await axios.get('https://www.nseindia.com/api/allIndices', {
+        timeout: 6000, headers: NSE_HEADERS,
+      }).catch(() => null);
+
+      if (idxRes?.data?.data) {
+        const indices = idxRes.data.data;
+        if (!nifty) {
+          const n = indices.find(i => i.index === 'NIFTY 50' || i.indexSymbol === 'NIFTY 50');
+          if (n) nifty = n.last || n.lastPrice;
+        }
+        if (!vix) {
+          const v = indices.find(i => i.index === 'INDIA VIX' || i.indexSymbol === 'INDIA VIX');
+          if (v) vix = v.last || v.lastPrice;
+        }
+      }
+    }
+
+    if (!nifty && !vix) throw new Error('Could not parse NSE response');
+
+    const snapshot = {
+      nifty:     nifty  ? parseFloat(parseFloat(nifty).toFixed(2))  : null,
+      vix:       vix    ? parseFloat(parseFloat(vix).toFixed(2))    : null,
+      timestamp: new Date().toISOString(),
+      marketStatus: isMarketOpen() ? 'open' : 'closed',
+    };
+
+    snapCache.data = snapshot;
+    snapCache.ts   = Date.now();
+
+    res.json({ ...snapshot, source: 'live' });
+  } catch (err) {
+    // Return last known values if available, else error
+    if (snapCache.data) {
+      return res.json({ ...snapCache.data, source: 'stale_cache', staleSince: new Date(snapCache.ts).toISOString() });
+    }
+    res.status(503).json({ message: 'Market data unavailable', error: err.message });
+  }
+});
+
+function isMarketOpen() {
+  const now = new Date();
+  // IST = UTC + 5:30
+  const istMins = (now.getUTCHours() * 60 + now.getUTCMinutes() + 330) % 1440;
+  const day     = new Date(now.getTime() + 330 * 60000).getUTCDay(); // 0=Sun, 6=Sat
+  if (day === 0 || day === 6) return false; // weekend
+  return istMins >= 555 && istMins <= 930;  // 9:15 AM to 3:30 PM IST
+}
+
 export default router;

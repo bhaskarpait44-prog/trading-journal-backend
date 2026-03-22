@@ -210,4 +210,159 @@ router.post('/import/broker', async (req, res) => {
   }
 });
 
+// ── POST /api/trades/import/fyers ─────────────────────────────────────────────
+router.post('/import/fyers', async (req, res) => {
+  const { appId, accessToken, fromDate, toDate } = req.body;
+  if (!accessToken) return res.status(400).json({ message: 'Access token is required.' });
+  if (!appId)       return res.status(400).json({ message: 'App ID is required.' });
+
+  const { default: axios } = await import('axios');
+  const today = new Date().toISOString().split('T')[0];
+  const from  = fromDate || today;
+  const to    = toDate   || today;
+
+  // Fyers API v3: Authorization header must be "APPID:access_token"
+  // The appId might be entered as "XY1234-100" — we use it as-is
+  const authHeader = `${appId.trim()}:${accessToken.trim()}`;
+
+  const hdrs = {
+    'Authorization': authHeader,
+    'Content-Type':  'application/json',
+    'Accept':        'application/json',
+  };
+
+  let fyersRows = [];
+  let lastError = null;
+
+  // Try multiple Fyers API endpoints (they sometimes change)
+  const endpoints = [
+    'https://api-t1.fyers.in/api/v3/tradebook',
+    'https://api-t2.fyers.in/api/v3/tradebook',
+    'https://api.fyers.in/api/v3/tradebook',
+  ];
+
+  for (const url of endpoints) {
+    try {
+      const r    = await axios.get(url, { headers: hdrs, timeout: 15000 });
+      const data = r.data;
+
+      // Fyers returns { s: 'ok', tradeBook: [...] } or { s: 'error', message: '...' }
+      if (data?.s === 'error' || data?.s === 'Error') {
+        const errMsg = data?.message || data?.errmsg || 'Fyers API returned error';
+        // Auth errors — stop trying other endpoints
+        if (errMsg.toLowerCase().includes('token') || errMsg.toLowerCase().includes('auth') ||
+            errMsg.toLowerCase().includes('invalid') || errMsg.toLowerCase().includes('unauthorized')) {
+          return res.status(401).json({
+            message: `Invalid token: ${errMsg}. Re-generate your access token from myapi.fyers.in.`,
+          });
+        }
+        throw new Error(errMsg);
+      }
+
+      fyersRows = Array.isArray(data?.tradeBook) ? data.tradeBook
+                : Array.isArray(data?.data)       ? data.data
+                : Array.isArray(data)              ? data
+                : [];
+      lastError = null;
+      break; // success — stop trying
+    } catch (err) {
+      lastError = err;
+      const status = err.response?.status;
+      // Don't retry on auth errors
+      if (status === 401 || status === 403) break;
+      // Don't retry on 400 bad request
+      if (status === 400) break;
+    }
+  }
+
+  if (lastError) {
+    const status = lastError.response?.status;
+    const d      = lastError.response?.data;
+    let msg;
+    if (status === 401 || status === 403) {
+      msg = 'Access token is invalid or expired. Go to myapi.fyers.in → Generate Token and paste the fresh token.';
+    } else if (status === 400) {
+      msg = `Bad request: ${d?.message || d?.errmsg || 'Check your App ID format (e.g. XY1234-100)'}`;
+    } else if (status === 429) {
+      msg = 'Fyers API rate limit hit. Wait 1 minute and try again.';
+    } else if (status === 502 || status === 503 || status === 504) {
+      msg = 'Fyers API servers are temporarily down (502/503). Try again in a few minutes, or use CSV export instead.';
+    } else if (!status) {
+      msg = `Cannot reach Fyers API. Check your internet connection. (${lastError.message})`;
+    } else {
+      msg = `Fyers API error (HTTP ${status}): ${d?.message || d?.errmsg || lastError.message}`;
+    }
+    return res.status(400).json({ message: msg });
+  }
+
+  // Filter by date range
+  if (from || to) {
+    fyersRows = fyersRows.filter(t => {
+      const d = (t.orderDateTime || t.tradeDate || t.order_date_time || '').slice(0,10);
+      if (from && d < from) return false;
+      if (to   && d > to)   return false;
+      return true;
+    });
+  }
+
+  // Filter F&O options only
+  const fnoRows = fyersRows.filter(t => {
+    const sym = (t.symbol || t.tradingSymbol || '').toUpperCase();
+    // Fyers symbols: NSE:NIFTY24DEC22500CE or MCX:... 
+    return sym.includes(':') && (sym.endsWith('CE') || sym.endsWith('PE'))
+        || (!sym.includes(':') && (sym.endsWith('CE') || sym.endsWith('PE')));
+  });
+
+  if (!fnoRows.length && fyersRows.length > 0)
+    return res.status(400).json({ message: `Found ${fyersRows.length} trades but none are F&O options.` });
+  if (!fnoRows.length)
+    return res.status(400).json({ message: 'No trades found in this date range. Try a wider range.' });
+
+  const rawTrades = fnoRows.map(t => {
+    const fullSym    = (t.symbol || t.tradingSymbol || '').toUpperCase();
+    // Strip exchange prefix: NSE:NIFTY24DEC22500CE → NIFTY24DEC22500CE
+    const sym        = fullSym.includes(':') ? fullSym.split(':')[1] : fullSym;
+    const exchange   = fullSym.startsWith('BSE') ? 'BSE' : 'NSE';
+    const optionType = sym.endsWith('CE') ? 'CE' : 'PE';
+    // Strip option type + strike + expiry from end to get underlying
+    const underlying = sym.replace(/\d{2}[A-Z]{3}\d{2,6}(CE|PE)$/i,'').replace(/\d+.*$/,'') || 'UNKNOWN';
+    // Strike: last numeric sequence before CE/PE
+    const strikeMatch = sym.match(/(\d+)(CE|PE)$/i);
+    const strikePrice = strikeMatch ? parseFloat(strikeMatch[1]) : 0;
+    // Expiry from symbol (e.g. 24DEC = Dec 2024)
+    const expMatch = sym.match(/(\d{2})([A-Z]{3})(\d{2,4})/i);
+    let expiryDate = new Date();
+    if (expMatch) {
+      const yr  = expMatch[3].length === 2 ? '20' + expMatch[3] : expMatch[3];
+      expiryDate = new Date(`${expMatch[1]} ${expMatch[2]} ${yr}`);
+    }
+
+    const tradeType  = (t.side === 1 || t.side === 'BUY'  || t.transactionType === 'BUY')  ? 'BUY' : 'SELL';
+    const entryPrice = parseFloat(t.tradePrice || t.tradedPrice || t.rate || 0);
+    const quantity   = parseInt(t.tradedQty || t.qty || t.quantity || 1);
+    const charges    = calcCharges(entryPrice, 0, 1, quantity, tradeType, exchange).total;
+    const entryDate  = new Date(t.orderDateTime || t.tradeDate || Date.now());
+
+    return {
+      symbol: sym, underlying: underlying.toUpperCase(), tradeType, optionType, exchange,
+      strikePrice, expiryDate, lotSize: 1, quantity, entryPrice, entryDate,
+      brokerId: t.tradeId || t.orderId || '', charges,
+    };
+  });
+
+  try {
+    const paired   = buildPositions(rawTrades, req.user._id, 'broker_api', 'fyers');
+    const inserted = await Trade.insertMany(paired, { ordered: false });
+    res.json({
+      message: `${inserted.length} trades synced from Fyers.`,
+      count: inserted.length,
+      closed: paired.filter(t => t.status === 'CLOSED').length,
+      open:   paired.filter(t => t.status === 'OPEN').length,
+      tradeIds: inserted.map(t => ({ _id: t._id, symbol: t.symbol, entryDate: t.entryDate })),
+    });
+  } catch(err) {
+    res.status(500).json({ message: 'Failed to save trades: ' + err.message });
+  }
+});
+
 export default router;
