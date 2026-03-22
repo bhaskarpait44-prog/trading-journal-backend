@@ -92,17 +92,33 @@ router.get('/callback', async (req, res) => {
     console.log('[Fyers] appIdHash:', appIdHash);
 
     const r = await axios.post('https://api-t1.fyers.in/api/v3/token', {
-      grant_type: 'authorization_code',
+      grant_type:  'authorization_code',
       appIdHash,
-      code: authCode,
+      code:        authCode,
     }, {
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        'Accept':        'application/json',
+      },
       timeout: 15000,
     });
 
-    console.log('[Fyers] Token exchange response:', JSON.stringify(r.data));
+    // Also try validate-authcode if token returns error
+    let data = r.data;
+    if ((data?.s === 'error' || data?.code === 403) && !data?.access_token) {
+      console.log('[Fyers] /token failed, trying /validate-authcode...');
+      const r2 = await axios.post('https://api-t1.fyers.in/api/v3/validate-authcode', {
+        grant_type: 'authorization_code',
+        appIdHash,
+        code: authCode,
+      }, {
+        headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+        timeout: 15000,
+      });
+      data = r2.data;
+    }
+    console.log('[Fyers] Token exchange response:', JSON.stringify(data));
 
-    const data = r.data;
     if (data?.s === 'error' || data?.s === 'Error') {
       throw new Error(data?.message || data?.errmsg || 'Token exchange failed');
     }
