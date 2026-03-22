@@ -76,20 +76,29 @@ router.get('/callback', async (req, res) => {
   try {
     const { default: axios } = await import('axios');
 
-    // Fyers requires SHA-256 hash of "appId:secretId"
+    // Fyers API v3: appIdHash = SHA256(appId:secretId)
+    // appId here is the full client_id e.g. "XY1234-100"
+    const hashInput = `${session.appId}:${session.secretId}`;
     const appIdHash = crypto
       .createHash('sha256')
-      .update(`${session.appId}:${session.secretId}`)
+      .update(hashInput)
       .digest('hex');
+
+    console.log('[Fyers] Exchanging auth_code for token...');
+    console.log('[Fyers] appId:', session.appId);
+    console.log('[Fyers] hashInput:', hashInput);
+    console.log('[Fyers] appIdHash:', appIdHash);
 
     const r = await axios.post('https://api-t1.fyers.in/api/v3/validate-authcode', {
       grant_type: 'authorization_code',
       appIdHash,
-      code:       authCode,
+      code: authCode,
     }, {
       headers: { 'Content-Type': 'application/json' },
       timeout: 15000,
     });
+
+    console.log('[Fyers] Token exchange response:', JSON.stringify(r.data));
 
     const data = r.data;
     if (data?.s === 'error' || data?.s === 'Error') {
@@ -97,7 +106,7 @@ router.get('/callback', async (req, res) => {
     }
 
     const accessToken = data?.access_token || data?.data?.access_token;
-    if (!accessToken) throw new Error('No access_token in Fyers response');
+    if (!accessToken) throw new Error('No access_token in Fyers response: ' + JSON.stringify(data));
 
     session.status      = 'success';
     session.accessToken = accessToken;
@@ -105,9 +114,11 @@ router.get('/callback', async (req, res) => {
     return res.send(closePopupHTML(null, accessToken, session.appId, sessionId));
 
   } catch (err) {
-    const msg = err.response?.data?.message || err.message || 'Token exchange failed';
+    const errData = err.response?.data;
+    const msg     = errData?.message || errData?.errmsg || err.message || 'Token exchange failed';
+    console.error('[Fyers] Token exchange error:', err.response?.status, JSON.stringify(errData));
     session.status = 'error';
-    session.error  = msg;
+    session.error  = `${msg} (HTTP ${err.response?.status || 'network'})`;
     return res.send(closePopupHTML(msg, null));
   }
 });
