@@ -4,8 +4,9 @@
  *           ICICI Direct, HDFC, Sharekhan, Kotak, AliceBlue, Dhan, Generic
  */
 
+import { calcCharges } from './calcCharges.js';
+
 export const BROKER_NAMES = {
-  ZERODHA:   'Zerodha',
   UPSTOX:    'Upstox',
   ANGEL:     'Angel One',
   FYERS:     'Fyers',
@@ -408,30 +409,43 @@ export function parseCSVBuffer(buffer, userId) {
       const optionType = t.optionType || extractOptionType(t.symbol);
       if (!optionType) { skipped.push({ row: i+2, reason: 'Not an options trade (CE/PE/CALL/PUT not found)', symbol: t.symbol }); continue; }
 
+      const exchange   = t.exchange || 'NSE';
+      const lotSize    = t.lotSize  || 1;
+      const qty        = t.quantity || 1;
+      const tradeType  = t.tradeType || 'BUY';
+      const entryPrice = t.entryPrice;
+      const exitPrice  = t.exitPrice && t.exitPrice > 0 ? t.exitPrice : null;
+
+      // Always auto-calculate Zerodha F&O Options charges — ignore any CSV charge columns
+      const charges = exitPrice
+        ? calcCharges(entryPrice, exitPrice, lotSize, qty, tradeType, exchange).total
+        : calcCharges(entryPrice, 0, lotSize, qty, tradeType, exchange).total;
+
       const tradeDoc = {
         userId,
         source:      'csv',
         broker,
+        exchange,
         symbol:      t.symbol,
         underlying:  (t.underlying || extractUnderlying(t.symbol) || t.symbol).toUpperCase(),
-        tradeType:   t.tradeType || 'BUY',
+        tradeType,
         optionType,
         strikePrice: t.strikePrice || extractStrike(t.symbol),
         expiryDate:  t.expiryDate || inferExpiryFromSymbol(t.symbol) || new Date(),
-        lotSize:     t.lotSize  || 1,
-        quantity:    t.quantity || 1,
-        entryPrice:  t.entryPrice,
+        lotSize,
+        quantity:    qty,
+        entryPrice,
         entryDate:   t.entryDate,
         status:      t.status   || 'OPEN',
-        charges:     t.charges  || 0,
+        charges,
       };
 
-      if (t.exitPrice && t.exitPrice > 0) {
-        tradeDoc.exitPrice = t.exitPrice;
+      if (exitPrice) {
+        tradeDoc.exitPrice = exitPrice;
         tradeDoc.exitDate  = t.exitDate || t.entryDate;
         tradeDoc.status    = 'CLOSED';
         tradeDoc.pnl       = t.pnl    || 0;
-        tradeDoc.netPnl    = t.netPnl || (t.pnl || 0) - (t.charges || 0);
+        tradeDoc.netPnl    = t.netPnl || (t.pnl || 0) - charges;
       }
 
       trades.push(tradeDoc);

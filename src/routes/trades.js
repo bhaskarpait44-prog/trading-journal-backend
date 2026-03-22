@@ -3,6 +3,7 @@ import multer from 'multer';
 import Trade from '../models/Trade.js';
 import { protect } from '../middleware/auth.js';
 import { parseCSVBuffer } from '../lib/csvParser.js';
+import { calcCharges } from '../lib/calcCharges.js';
 
 const router = express.Router();
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024 } });
@@ -64,15 +65,43 @@ router.get('/', async (req, res) => {
 
 router.post('/', async (req, res) => {
   try {
-    const trade = await Trade.create({...req.body,userId:req.user._id,source:'manual'});
-    res.status(201).json({trade});
-  } catch(err){res.status(400).json({message:err.message});}
+    const body     = { ...req.body, userId: req.user._id, source: 'manual' };
+    const exchange = body.exchange || 'NSE';
+    // Always auto-calculate — ignore any charges sent from client
+    if (body.exitPrice && body.status === 'CLOSED') {
+      body.charges = calcCharges(body.entryPrice, body.exitPrice, body.lotSize, body.quantity, body.tradeType, exchange).total;
+    } else {
+      body.charges = calcCharges(body.entryPrice, 0, body.lotSize, body.quantity, body.tradeType, exchange).total;
+    }
+    const trade = await Trade.create(body);
+    res.status(201).json({ trade });
+  } catch(err) { res.status(400).json({ message: err.message }); }
 });
 
 router.put('/:id', async (req, res) => {
   try {
-    const trade = await Trade.findOneAndUpdate({_id:req.params.id,userId:req.user._id},req.body,{new:true,runValidators:true});
-    if(!trade) return res.status(404).json({message:'Trade not found.'});
+    const existing = await Trade.findOne({ _id: req.params.id, userId: req.user._id });
+    if (!existing) return res.status(404).json({ message: 'Trade not found.' });
+    const body     = { ...req.body };
+    const exchange = body.exchange || existing.exchange || 'NSE';
+    const entry    = body.entryPrice  || existing.entryPrice;
+    const exit     = body.exitPrice   || existing.exitPrice;
+    const lotSize  = body.lotSize     || existing.lotSize;
+    const qty      = body.quantity    || existing.quantity;
+    const type     = body.tradeType   || existing.tradeType;
+    const status   = body.status      || existing.status;
+    // Recalculate charges whenever trade is updated
+    if (exit && status === 'CLOSED') {
+      body.charges = calcCharges(entry, exit, lotSize, qty, type, exchange).total;
+    } else {
+      body.charges = calcCharges(entry, 0, lotSize, qty, type, exchange).total;
+    }
+    const trade = await Trade.findOneAndUpdate(
+      { _id: req.params.id, userId: req.user._id },
+      body,
+      { new: true, runValidators: true }
+    );
+    res.json({ trade });
     res.json({trade});
   } catch(err){res.status(400).json({message:err.message});}
 });
@@ -161,10 +190,16 @@ router.post('/import/broker', async (req, res) => {
   if (!fnoRows.length) return res.status(400).json({ message: 'No trades found in this date range. Try a wider range.' });
 
   const rawTrades = fnoRows.map(t => {
-    const sym = (t.customSymbol || t.tradingSymbol || '').toUpperCase();
+    const sym        = (t.customSymbol || t.tradingSymbol || '').toUpperCase();
     const optionType = t.drvOptionType==='CALL'?'CE':t.drvOptionType==='PUT'?'PE':sym.endsWith('CE')?'CE':'PE';
     const underlying = sym.replace(/\d{2}[A-Z]{3}\d{2,4}(CE|PE)$/i,'').replace(/\d+.*$/,'').replace(/[-_]/g,'')||'UNKNOWN';
-    return { symbol:sym, underlying:underlying.toUpperCase(), tradeType:t.transactionType==='BUY'?'BUY':'SELL', optionType, strikePrice:parseFloat(t.drvStrikePrice)||0, expiryDate:t.drvExpiryDate&&t.drvExpiryDate!=='NA'?new Date(t.drvExpiryDate):new Date(), lotSize:1, quantity:parseInt(t.tradedQuantity)||1, entryPrice:parseFloat(t.tradedPrice)||0, entryDate:new Date(t.exchangeTime||t.createTime||Date.now()), brokerId:t.exchangeTradeId||t.orderId||'', charges:[t.sebiTax,t.stt,t.brokerageCharges,t.serviceTax,t.exchangeTransactionCharges,t.stampDuty].reduce((s,v)=>s+(parseFloat(v)||0),0) };
+    const exchange   = (t.exchangeSegment||'').startsWith('BSE') ? 'BSE' : 'NSE';
+    const tradeType  = t.transactionType==='BUY' ? 'BUY' : 'SELL';
+    const entryPrice = parseFloat(t.tradedPrice) || 0;
+    const quantity   = parseInt(t.tradedQuantity) || 1;
+    // Auto-calculate charges using verified Zerodha F&O rates — ignore Dhan's reported charges
+    const charges    = calcCharges(entryPrice, 0, 1, quantity, tradeType, exchange).total;
+    return { symbol:sym, underlying:underlying.toUpperCase(), tradeType, optionType, exchange, strikePrice:parseFloat(t.drvStrikePrice)||0, expiryDate:t.drvExpiryDate&&t.drvExpiryDate!=='NA'?new Date(t.drvExpiryDate):new Date(), lotSize:1, quantity, entryPrice, entryDate:new Date(t.exchangeTime||t.createTime||Date.now()), brokerId:t.exchangeTradeId||t.orderId||'', charges };
   });
 
   try {

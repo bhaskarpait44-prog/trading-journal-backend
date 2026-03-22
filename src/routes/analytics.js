@@ -18,9 +18,15 @@ router.get('/summary', async (req, res) => {
     const totalPnl   = trades.reduce((s, t) => s + (t.netPnl || 0), 0);
     const avgWin     = winners.length ? winners.reduce((s,t) => s + t.netPnl, 0) / winners.length : 0;
     const avgLoss    = losers.length  ? losers.reduce((s,t)  => s + t.netPnl, 0) / losers.length  : 0;
+    const totalCharges = trades.reduce((s,t) => s + (t.charges||0), 0);
+    const nseCharges   = trades.filter(t => (t.exchange||'NSE') === 'NSE').reduce((s,t) => s + (t.charges||0), 0);
+    const bseCharges   = trades.filter(t => t.exchange === 'BSE').reduce((s,t) => s + (t.charges||0), 0);
+    const nseTrades    = trades.filter(t => (t.exchange||'NSE') === 'NSE').length;
+    const bseTrades    = trades.filter(t => t.exchange === 'BSE').length;
     res.json({
       totalTrades: trades.length, openTrades, winners: winners.length, losers: losers.length,
-      totalPnl, totalCharges: trades.reduce((s,t) => s + (t.charges||0), 0),
+      totalPnl, totalCharges, nseCharges, bseCharges, nseTrades, bseTrades,
+      grossPnl: trades.reduce((s,t) => s + (t.pnl||0), 0),
       avgWin, avgLoss, winRate: trades.length ? (winners.length / trades.length) * 100 : 0,
       profitFactor: Math.abs(avgLoss) > 0 ? Math.abs(avgWin / avgLoss) : 0,
       maxWin:  winners.length ? Math.max(...winners.map(t => t.netPnl)) : 0,

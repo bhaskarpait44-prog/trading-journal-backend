@@ -49,6 +49,7 @@ const tradeSchema = new mongoose.Schema({
   source:      { type: String, enum: ['manual','csv','broker_api'], default: 'manual' },
   brokerId:    { type: String },
   broker:      { type: String },
+  exchange:    { type: String, enum: ['NSE', 'BSE'], default: 'NSE' },
   iv: { type: Number }, delta: { type: Number }, theta: { type: Number },
   niftyAtEntry: { type: Number },
   vixAtEntry:   { type: Number },
